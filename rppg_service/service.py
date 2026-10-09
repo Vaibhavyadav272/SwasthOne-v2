@@ -28,7 +28,11 @@ import swasthone_rppg_FINAL_V2 as v2
 MAX_UPLOAD_MB = int(os.environ.get("RPPG_MAX_UPLOAD_MB", "40"))
 MAX_FRAMES = int(os.environ.get("RPPG_MAX_FRAMES", "2400"))        # ~80 s @ 30 fps
 TIME_BUDGET_S = float(os.environ.get("RPPG_TIME_BUDGET_S", "90"))
-DETECT_MAX_SIDE = int(os.environ.get("RPPG_DETECT_MAX_SIDE", "480"))
+DETECT_MAX_SIDE = int(os.environ.get("RPPG_DETECT_MAX_SIDE", "320"))
+# Run the (expensive) Haar face detector only every Nth frame and reuse the
+# smoothed box in between. ROIs are still cut from every frame. Set to 1 to
+# detect on every frame (original behaviour).
+DETECT_EVERY = max(1, int(os.environ.get("RPPG_DETECT_EVERY", "3")))
 MIN_FACE_RATIO = float(os.environ.get("RPPG_MIN_FACE_RATIO", "0.80"))
 MIN_FS, MAX_FS = 10.0, 60.0
 
@@ -153,31 +157,38 @@ def analyze_video(file_storage, nominal_duration=None, cascade_factory=None):
             frames += 1
 
             # --- face detection on a downscaled image ----------------------
-            # Resize before grayscale conversion. The detector only needs a
-            # <=480px image; ROI crops below still use the original frame.
-            fh, fw = frame.shape[:2]
-            scale = min(1.0, DETECT_MAX_SIDE / float(max(fh, fw)))
-            if scale < 1.0:
-                small_frame = cv2.resize(
-                    frame,
-                    (max(1, int(round(fw * scale))),
-                     max(1, int(round(fh * scale)))),
-                    interpolation=cv2.INTER_AREA,
+            # The detector only needs a small image, and the face barely moves
+            # between consecutive frames, so it runs every DETECT_EVERY frames.
+            run_detect = smoothed_face is None or (frames - 1) % DETECT_EVERY == 0
+            have_box = False
+            if run_detect:
+                fh, fw = frame.shape[:2]
+                scale = min(1.0, DETECT_MAX_SIDE / float(max(fh, fw)))
+                if scale < 1.0:
+                    small_frame = cv2.resize(
+                        frame,
+                        (max(1, int(round(fw * scale))),
+                         max(1, int(round(fh * scale)))),
+                        interpolation=cv2.INTER_AREA,
+                    )
+                else:
+                    small_frame = frame
+                small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
+                min_side = max(20, int(100 * scale))
+                faces = cascade.detectMultiScale(
+                    small, scaleFactor=1.1, minNeighbors=5,
+                    minSize=(min_side, min_side),
                 )
+                if len(faces) and scale < 1.0:
+                    faces = [tuple(int(round(v / scale)) for v in f) for f in faces]
+                if len(faces):
+                    face = max(faces, key=lambda r: r[2] * r[3])
+                    smoothed_face = v2.smooth_face_box(smoothed_face, face)
+                    have_box = True
             else:
-                small_frame = frame
-            small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2GRAY)
-            min_side = max(20, int(100 * scale))
-            faces = cascade.detectMultiScale(
-                small, scaleFactor=1.1, minNeighbors=5,
-                minSize=(min_side, min_side),
-            )
-            if len(faces) and scale < 1.0:
-                faces = [tuple(int(round(v / scale)) for v in f) for f in faces]
+                have_box = True  # reuse the last smoothed box
 
-            if len(faces):
-                face = max(faces, key=lambda r: r[2] * r[3])
-                smoothed_face = v2.smooth_face_box(smoothed_face, face)
+            if have_box:
                 x, y, w, h = smoothed_face
                 all_face_history.append(smoothed_face)
 
