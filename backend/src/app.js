@@ -32,7 +32,10 @@ app.use(
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
         fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
-        connectSrc: ["'self'", ...(rppgUrl ? [rppgUrl] : [])],
+        connectSrc: [
+  "'self'",
+  "https://swasthone-rppg-v2.onrender.com",
+],
         imgSrc: ["'self'", "data:", "blob:"],
         mediaSrc: ["'self'", "blob:"],
         workerSrc: ["'self'", "blob:"],
